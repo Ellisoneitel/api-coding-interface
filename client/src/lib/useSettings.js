@@ -6,13 +6,14 @@ import { useEffect, useState, useCallback, useRef } from "react";
 const KEY = "codex-local-assistant.store.v2";
 const OLD_KEY = "codex-local-assistant.settings.v1";
 
-// Per-conversation settings (everything that used to be global).
+// Per-conversation settings (everything that used to be global). The safety
+// identifier is always sent for a conversation (no on/off toggle); it's set
+// when the chat is created.
 const SETTING_DEFAULTS = {
   keyId: null, // which pooled API key this chat uses
   model: "gpt-5.5",
   approvalMode: "manual", // "manual" | "auto"
   allowOutsideWorkspace: false,
-  safetyIdentifierEnabled: false,
   safetyIdentifier: "",
   workspaceRoot: "",
   workspaceValidated: false,
@@ -20,9 +21,16 @@ const SETTING_DEFAULTS = {
 
 const SETTING_KEYS = Object.keys(SETTING_DEFAULTS);
 
+// Synchronous random hex (used to seed a chat's always-on safety identifier).
+export function randomHex(bytes = 32) {
+  const a = new Uint8Array(bytes);
+  crypto.getRandomValues(a);
+  return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 function makeChat(seed = {}) {
   const now = Date.now();
-  return {
+  const chat = {
     id: crypto.randomUUID(),
     title: "New chat",
     createdAt: now,
@@ -34,6 +42,9 @@ function makeChat(seed = {}) {
     // only copy known setting fields from the seed
     ...Object.fromEntries(SETTING_KEYS.filter((k) => k in seed).map((k) => [k, seed[k]])),
   };
+  // Every conversation always carries a safety identifier.
+  if (!chat.safetyIdentifier) chat.safetyIdentifier = randomHex();
+  return chat;
 }
 
 function freshStore() {
@@ -50,7 +61,6 @@ function migrateV1(old) {
     model: old.model ?? SETTING_DEFAULTS.model,
     approvalMode: old.approvalMode ?? SETTING_DEFAULTS.approvalMode,
     allowOutsideWorkspace: old.allowOutsideWorkspace ?? false,
-    safetyIdentifierEnabled: old.safetyIdentifierEnabled ?? false,
     safetyIdentifier: old.safetyIdentifier ?? "",
     workspaceRoot: old.workspaceRoot ?? "",
     workspaceValidated: old.workspaceValidated ?? false,
@@ -69,6 +79,11 @@ function normalize(store) {
   }
   if (!store.chats.find((c) => c.id === store.activeChatId)) {
     store.activeChatId = store.chats[0].id;
+  }
+  // Backfill always-on safety identifiers and drop the old enable flag.
+  for (const c of store.chats) {
+    if (!c.safetyIdentifier) c.safetyIdentifier = randomHex();
+    delete c.safetyIdentifierEnabled;
   }
   store.version = 2;
   return store;
@@ -109,8 +124,8 @@ export function useStore() {
 
   // ── API key pool ──────────────────────────────────────────────────────────
   const addKey = useCallback((label, key) => {
+    const id = crypto.randomUUID();
     setStore((s) => {
-      const id = crypto.randomUUID();
       const apiKeys = [...s.apiKeys, { id, label: label || `Key ${s.apiKeys.length + 1}`, key }];
       // If the active chat has no key yet, adopt the one just added.
       const chats = s.chats.map((c) =>
@@ -118,6 +133,7 @@ export function useStore() {
       );
       return { ...s, apiKeys, chats };
     });
+    return id; // so callers (the New chat panel) can auto-select it
   }, []);
 
   const removeKey = useCallback((id) => {
@@ -130,14 +146,17 @@ export function useStore() {
   }, []);
 
   // ── Chats ─────────────────────────────────────────────────────────────────
-  const newChat = useCallback(() => {
+  // Create a chat from an explicit seed (the New-chat panel). Any setting the
+  // seed omits is inherited from the current chat / defaults.
+  const createChat = useCallback((seed = {}) => {
     setStore((s) => {
-      const src = s.chats.find((c) => c.id === s.activeChatId) || s.defaults;
-      // Inherit the current chat's settings (key, workspace, model, …) so a new
-      // session starts where you left off; you can change the key in the sidebar.
-      const seed = { ...Object.fromEntries(SETTING_KEYS.map((k) => [k, src[k]])) };
-      if (!seed.keyId) seed.keyId = s.apiKeys[0]?.id || null;
-      const chat = makeChat(seed);
+      const base = s.chats.find((c) => c.id === s.activeChatId) || s.defaults;
+      const merged = {
+        ...Object.fromEntries(SETTING_KEYS.map((k) => [k, base[k]])),
+        ...Object.fromEntries(SETTING_KEYS.filter((k) => k in seed).map((k) => [k, seed[k]])),
+      };
+      if (!merged.keyId) merged.keyId = s.apiKeys[0]?.id || null;
+      const chat = makeChat(merged);
       return { ...s, chats: [chat, ...s.chats], activeChatId: chat.id };
     });
   }, []);
@@ -206,7 +225,7 @@ export function useStore() {
     activeChat,
     activeChatId: store.activeChatId,
     activeKey,
-    newChat,
+    createChat,
     switchChat,
     renameChat,
     deleteChat,

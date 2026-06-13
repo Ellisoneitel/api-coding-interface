@@ -18,6 +18,7 @@ import Sidebar from "./components/Sidebar";
 import TurnLog from "./components/TurnLog";
 import ToolCard from "./components/ToolCard";
 import Markdown from "./components/Markdown";
+import NewChatModal from "./components/NewChatModal";
 
 let msgId = 0;
 const nextId = () => `m${++msgId}`;
@@ -108,13 +109,15 @@ export default function App() {
     activeChat,
     activeChatId,
     activeKey,
-    newChat,
+    createChat,
     switchChat,
     renameChat,
     deleteChat,
     updateChat,
     updateActive,
   } = useStore();
+
+  const [showNewChat, setShowNewChat] = useState(false);
 
   // The active chat is the single source of truth for the conversation, its
   // turn log, and its settings.
@@ -230,7 +233,7 @@ export default function App() {
     const chatId = activeChatId;
     streamChatId.current = chatId;
     const sentAttachments = attachments;
-    const safetyId = chat.safetyIdentifierEnabled ? chat.safetyIdentifier || "" : null;
+    const safetyId = chat.safetyIdentifier || null;
     const turnId = nextId();
     currentTurnId.current = turnId;
 
@@ -467,15 +470,12 @@ export default function App() {
         width={leftWidth}
         chats={chats}
         activeChatId={activeChatId}
-        onNewChat={newChat}
+        onNewChat={() => setShowNewChat(true)}
         onSwitchChat={switchChat}
         onRenameChat={renameChat}
         onDeleteChat={deleteChat}
         settings={chat}
         update={updateActive}
-        apiKeys={apiKeys}
-        addKey={addKey}
-        removeKey={removeKey}
         activeKey={activeKey}
       />
       <ResizeHandle width={leftWidth} setWidth={setLeftWidth} dir={1} />
@@ -498,7 +498,7 @@ export default function App() {
             <Download size={14} /> .md
           </button>
           <button
-            onClick={newChat}
+            onClick={() => setShowNewChat(true)}
             className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-sm hover:bg-white/5"
           >
             <Plus size={14} /> New chat
@@ -677,6 +677,19 @@ export default function App() {
 
       <ResizeHandle width={rightWidth} setWidth={setRightWidth} dir={-1} />
       <TurnLog width={rightWidth} turns={turns} onExport={exportTurnLog} />
+
+      <NewChatModal
+        open={showNewChat}
+        onClose={() => setShowNewChat(false)}
+        onCreate={(seed) => {
+          createChat(seed);
+          setShowNewChat(false);
+        }}
+        apiKeys={apiKeys}
+        addKey={addKey}
+        removeKey={removeKey}
+        defaults={chat || {}}
+      />
     </div>
   );
 }
