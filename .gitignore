@@ -35,3 +35,4 @@ Thumbs.db
 
 # Claude Code local overrides (keep launch.json tracked)
 .claude/settings.local.json
+.claude
