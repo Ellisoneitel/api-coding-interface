@@ -1,0 +1,18 @@
+{
+  "name": "codex-local-assistant",
+  "private": true,
+  "version": "1.0.0",
+  "description": "A local agentic coding assistant powered by the OpenAI Responses API (Codex).",
+  "type": "module",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,magenta \"npm run dev -w server\" \"npm run dev -w client\"",
+    "start": "concurrently -n server,client -c blue,magenta \"npm run start -w server\" \"npm run dev -w client\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

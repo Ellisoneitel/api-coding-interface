@@ -1,0 +1,51 @@
+@import "tailwindcss";
+@import "highlight.js/styles/github-dark.css";
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #0a0a0b;
+  color: #e7e7ea;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Markdown styling inside chat bubbles */
+.md :where(p):not(:first-child) { margin-top: 0.6rem; }
+.md :where(ul, ol) { margin: 0.5rem 0; padding-left: 1.25rem; }
+.md :where(ul) { list-style: disc; }
+.md :where(ol) { list-style: decimal; }
+.md :where(li) { margin: 0.15rem 0; }
+.md :where(h1, h2, h3) { font-weight: 600; margin: 0.75rem 0 0.4rem; }
+.md :where(h1) { font-size: 1.15rem; }
+.md :where(h2) { font-size: 1.05rem; }
+.md :where(h3) { font-size: 1rem; }
+.md :where(a) { color: #7dd3fc; text-decoration: underline; }
+.md :where(code):not(pre code) {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.3rem;
+  font-size: 0.85em;
+}
+.md :where(pre) {
+  background: #0d1117;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.6rem;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  margin: 0.6rem 0;
+  font-size: 0.85rem;
+}
+
+/* Thin scrollbars */
+* { scrollbar-width: thin; scrollbar-color: #2a2a30 transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: #2a2a30; border-radius: 8px; }
