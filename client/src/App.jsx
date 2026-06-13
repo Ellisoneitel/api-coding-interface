@@ -231,7 +231,7 @@ export default function App() {
     const chatId = activeChatId;
     streamChatId.current = chatId;
     const sentAttachments = attachments;
-    const safetyId = chat.safetyIdentifier || null;
+    const safetyId = chat.safetyIdentifierEnabled ? chat.safetyIdentifier || null : null;
     const turnId = nextId("turn");
 
     setError(null);
@@ -335,6 +335,29 @@ export default function App() {
             setStatus("");
           },
           error: (d) => {
+            const failedCall = {
+              request_id: d.request_id || null,
+              response_id: null,
+              model: chat.model,
+              usage: null,
+              status: d.status || null,
+              error: d.message || "Request failed.",
+            };
+            updateChat(chatId, (c) => ({
+              turns: c.turns.map((t) => {
+                if (t.id !== turnId) return t;
+                const existingIndex = failedCall.request_id
+                  ? t.calls.findIndex((call) => call.request_id === failedCall.request_id)
+                  : -1;
+                if (existingIndex === -1) return { ...t, calls: [...t.calls, failedCall] };
+                return {
+                  ...t,
+                  calls: t.calls.map((call, i) =>
+                    i === existingIndex ? { ...call, ...failedCall } : call
+                  ),
+                };
+              }),
+            }));
             setError(`${d.message}${d.request_id ? ` (request id: ${d.request_id})` : ""}`);
             setStatus("");
           },
@@ -434,7 +457,9 @@ export default function App() {
     const lines = [
       "Codex Local Assistant — Turn Log",
       `Chat: ${chat.title}`,
-      `Safety Identifier: ${chat.safetyIdentifier || "(not set)"}`,
+      `Safety Identifier: ${
+        chat.safetyIdentifierEnabled ? chat.safetyIdentifier || "(enabled, not set)" : "(disabled)"
+      }`,
       `Exported: ${new Date().toLocaleString()}`,
       "=".repeat(48),
       "",
@@ -449,6 +474,8 @@ export default function App() {
         lines.push(`  API call ${ci + 1}:`);
         lines.push(`    request_id:  ${c.request_id || "n/a"}`);
         lines.push(`    response_id: ${c.response_id || "n/a"}`);
+        if (c.status) lines.push(`    status:      ${c.status}`);
+        if (c.error) lines.push(`    error:       ${c.error}`);
         if (c.usage) {
           lines.push(
             `    tokens:      in ${c.usage.input_tokens ?? "?"} / out ${c.usage.output_tokens ?? "?"}`
@@ -677,6 +704,7 @@ export default function App() {
       <TurnLog
         width={rightWidth}
         turns={turns}
+        safetyIdentifierEnabled={chat?.safetyIdentifierEnabled}
         safetyIdentifier={chat?.safetyIdentifier}
         onExport={exportTurnLog}
       />

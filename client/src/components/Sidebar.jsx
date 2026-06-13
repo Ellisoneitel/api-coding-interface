@@ -157,8 +157,8 @@ export default function Sidebar({
           <div className="h-px flex-1 bg-white/10" />
         </div>
         <p className="text-[11px] text-zinc-600">
-          Live toggles for the current chat. Key, model, workspace, and safety ID are set when you
-          create it.
+          Live toggles for the current chat. Key, model, workspace, and optional safety ID are set
+          when you create it.
         </p>
       </div>
 

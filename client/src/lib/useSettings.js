@@ -7,13 +7,13 @@ const KEY = "codex-local-assistant.store.v2";
 const OLD_KEY = "codex-local-assistant.settings.v1";
 
 // Per-conversation settings (everything that used to be global). The safety
-// identifier is always sent for a conversation (no on/off toggle); it's set
-// when the chat is created.
+// identifier is optional per conversation and is sent only when enabled.
 const SETTING_DEFAULTS = {
   keyId: null, // which pooled API key this chat uses
   model: "gpt-5.5",
   approvalMode: "manual", // "manual" | "auto"
   allowOutsideWorkspace: false,
+  safetyIdentifierEnabled: false,
   safetyIdentifier: "",
   workspaceRoot: "",
   workspaceValidated: false,
@@ -21,7 +21,7 @@ const SETTING_DEFAULTS = {
 
 const SETTING_KEYS = Object.keys(SETTING_DEFAULTS);
 
-// Synchronous random hex (used to seed a chat's always-on safety identifier).
+// Synchronous random hex (used to seed a chat's safety identifier when enabled).
 export function randomHex(bytes = 32) {
   const a = new Uint8Array(bytes);
   crypto.getRandomValues(a);
@@ -42,8 +42,7 @@ function makeChat(seed = {}) {
     // only copy known setting fields from the seed
     ...Object.fromEntries(SETTING_KEYS.filter((k) => k in seed).map((k) => [k, seed[k]])),
   };
-  // Every conversation always carries a safety identifier.
-  if (!chat.safetyIdentifier) chat.safetyIdentifier = randomHex();
+  if (chat.safetyIdentifierEnabled && !chat.safetyIdentifier) chat.safetyIdentifier = randomHex();
   return chat;
 }
 
@@ -106,6 +105,7 @@ function migrateV1(old) {
     model: old.model ?? SETTING_DEFAULTS.model,
     approvalMode: old.approvalMode ?? SETTING_DEFAULTS.approvalMode,
     allowOutsideWorkspace: old.allowOutsideWorkspace ?? false,
+    safetyIdentifierEnabled: Boolean(old.safetyIdentifier),
     safetyIdentifier: old.safetyIdentifier ?? "",
     workspaceRoot: old.workspaceRoot ?? "",
     workspaceValidated: old.workspaceValidated ?? false,
@@ -116,7 +116,7 @@ function migrateV1(old) {
 
 function normalize(store) {
   if (!Array.isArray(store.apiKeys)) store.apiKeys = [];
-  if (!store.defaults) store.defaults = { ...SETTING_DEFAULTS };
+  store.defaults = { ...SETTING_DEFAULTS, ...(store.defaults || {}) };
   if (!Array.isArray(store.chats) || store.chats.length === 0) {
     const chat = makeChat(store.defaults);
     store.chats = [chat];
@@ -125,10 +125,11 @@ function normalize(store) {
   if (!store.chats.find((c) => c.id === store.activeChatId)) {
     store.activeChatId = store.chats[0].id;
   }
-  // Backfill always-on safety identifiers and drop the old enable flag.
   for (const c of store.chats) {
-    if (!c.safetyIdentifier) c.safetyIdentifier = randomHex();
-    delete c.safetyIdentifierEnabled;
+    if (typeof c.safetyIdentifierEnabled !== "boolean") {
+      c.safetyIdentifierEnabled = Boolean(c.safetyIdentifier);
+    }
+    if (c.safetyIdentifierEnabled && !c.safetyIdentifier) c.safetyIdentifier = randomHex();
     c.messages = ensureUniqueIds(c.messages, "msg");
     c.turns = dedupeTurnCalls(ensureUniqueIds(c.turns, "turn"));
   }

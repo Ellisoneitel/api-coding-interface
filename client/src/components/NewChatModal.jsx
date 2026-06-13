@@ -6,6 +6,7 @@ import {
   FolderOpen,
   FolderSearch,
   ShieldCheck,
+  ShieldOff,
   RefreshCw,
   Check,
   AlertTriangle,
@@ -17,19 +18,21 @@ import { validateWorkspace, browseFolder } from "../lib/agentClient";
 import { randomHex } from "../lib/useSettings";
 
 // Guided setup shown each time the user starts a new chat: manage/pick a key,
-// model, workspace, and the (always-on) safety identifier for the conversation.
+// model, workspace, and optionally enable a safety identifier for the conversation.
 export default function NewChatModal({ open, onClose, onCreate, apiKeys, addKey, removeKey, defaults }) {
   const [keyId, setKeyId] = useState(null);
   const [model, setModel] = useState("gpt-5.5");
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [validated, setValidated] = useState(false);
   const [wsStatus, setWsStatus] = useState(null);
+  const [safetyIdentifierEnabled, setSafetyIdentifierEnabled] = useState(false);
   const [safetyIdentifier, setSafetyIdentifier] = useState("");
   const [newLabel, setNewLabel] = useState("");
   const [newKey, setNewKey] = useState("");
 
   // (Re)initialize the form whenever the panel opens, inheriting the current
-  // chat's key/model/workspace. The safety identifier is fresh per conversation.
+  // chat's key/model/workspace. The safety identifier toggle starts off for each
+  // new conversation; enabling it generates a fresh id.
   useEffect(() => {
     if (!open) return;
     setKeyId(defaults?.keyId ?? apiKeys[0]?.id ?? null);
@@ -37,7 +40,8 @@ export default function NewChatModal({ open, onClose, onCreate, apiKeys, addKey,
     setWorkspaceRoot(defaults?.workspaceRoot || "");
     setValidated(false);
     setWsStatus(null);
-    setSafetyIdentifier(randomHex());
+    setSafetyIdentifierEnabled(false);
+    setSafetyIdentifier("");
     setNewLabel("");
     setNewKey("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -93,11 +97,27 @@ export default function NewChatModal({ open, onClose, onCreate, apiKeys, addKey,
     if (keyId === id) setKeyId(apiKeys.find((k) => k.id !== id)?.id ?? null);
   };
 
+  const toggleSafetyIdentifier = () => {
+    setSafetyIdentifierEnabled((enabled) => {
+      const next = !enabled;
+      if (next && !safetyIdentifier) setSafetyIdentifier(randomHex());
+      return next;
+    });
+  };
+
   const canCreate = validated && !!keyId;
 
   const create = () => {
     if (!canCreate) return;
-    onCreate({ keyId, model, workspaceRoot, workspaceValidated: true, safetyIdentifier });
+    const nextSafetyIdentifier = safetyIdentifierEnabled ? safetyIdentifier || randomHex() : "";
+    onCreate({
+      keyId,
+      model,
+      workspaceRoot,
+      workspaceValidated: true,
+      safetyIdentifierEnabled,
+      safetyIdentifier: nextSafetyIdentifier,
+    });
   };
 
   return (
@@ -242,27 +262,52 @@ export default function NewChatModal({ open, onClose, onCreate, apiKeys, addKey,
             )}
           </div>
 
-          {/* Safety identifier (always on) */}
+          {/* Safety identifier */}
           <div className="space-y-2">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-              <ShieldCheck size={13} /> Safety Identifier
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                {safetyIdentifierEnabled ? <ShieldCheck size={13} /> : <ShieldOff size={13} />}
+                Safety Identifier
+              </div>
+              <button
+                onClick={toggleSafetyIdentifier}
+                className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+                  safetyIdentifierEnabled ? "bg-sky-500" : "bg-zinc-700"
+                }`}
+                title={safetyIdentifierEnabled ? "Disable safety identifier" : "Enable safety identifier"}
+              >
+                <span
+                  className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+                    safetyIdentifierEnabled ? "translate-x-4" : "translate-x-0"
+                  }`}
+                />
+              </button>
             </div>
             <div className="flex gap-1.5">
               <input
                 value={safetyIdentifier}
                 onChange={(e) => setSafetyIdentifier(e.target.value)}
-                className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/30 px-2.5 py-1.5 font-mono text-xs outline-none focus:border-sky-500/60"
+                disabled={!safetyIdentifierEnabled}
+                placeholder={safetyIdentifierEnabled ? "safety identifier" : "Not sent for this chat"}
+                className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/30 px-2.5 py-1.5 font-mono text-xs outline-none focus:border-sky-500/60 disabled:opacity-50"
               />
               <button
                 onClick={() => setSafetyIdentifier(randomHex())}
+                disabled={!safetyIdentifierEnabled}
                 title="Generate a new safety identifier"
-                className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs hover:bg-white/5"
+                className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs hover:bg-white/5 disabled:opacity-40"
               >
                 <RefreshCw size={12} /> Generate
               </button>
             </div>
             <p className="text-[11px] text-zinc-500">
-              Sent as <code>safety_identifier</code> on every request in this conversation.
+              {safetyIdentifierEnabled ? (
+                <>
+                  Sent as <code>safety_identifier</code> on every request in this conversation.
+                </>
+              ) : (
+                "No safety_identifier will be sent for this conversation."
+              )}
             </p>
           </div>
         </div>

@@ -29,27 +29,41 @@ function IdRow({ label, value }) {
   );
 }
 
-function SafetyIdentifierCard({ value }) {
+function SafetyIdentifierCard({ enabled, value }) {
   return (
-    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] p-3 text-xs">
-      <div className="mb-2 flex items-center gap-1.5 font-semibold text-emerald-300">
-        <ShieldCheck size={13} /> Safety Identifier
+    <div
+      className={`rounded-xl border p-3 text-xs ${
+        enabled
+          ? "border-emerald-500/20 bg-emerald-500/[0.04]"
+          : "border-white/10 bg-white/[0.02]"
+      }`}
+    >
+      <div
+        className={`mb-2 flex items-center gap-1.5 font-semibold ${
+          enabled ? "text-emerald-300" : "text-zinc-400"
+        }`}
+      >
+        {enabled ? <ShieldCheck size={13} /> : <ShieldOff size={13} />} Safety Identifier
       </div>
-      {value ? (
+      {enabled && value ? (
         <div className="flex items-center gap-1.5 rounded-lg bg-black/30 p-2">
           <code className="min-w-0 flex-1 truncate text-zinc-300">{value}</code>
           <CopyBtn value={value} />
         </div>
+      ) : enabled ? (
+        <div className="flex items-center gap-1.5 rounded-lg bg-black/30 p-2 text-zinc-500">
+          <ShieldOff size={12} /> Enabled, not set
+        </div>
       ) : (
         <div className="flex items-center gap-1.5 rounded-lg bg-black/30 p-2 text-zinc-500">
-          <ShieldOff size={12} /> Not set
+          <ShieldOff size={12} /> Disabled for this chat
         </div>
       )}
     </div>
   );
 }
 
-export default function TurnLog({ width, turns, safetyIdentifier, onExport }) {
+export default function TurnLog({ width, turns, safetyIdentifierEnabled, safetyIdentifier, onExport }) {
   return (
     <aside
       style={{ width }}
@@ -69,7 +83,7 @@ export default function TurnLog({ width, turns, safetyIdentifier, onExport }) {
       </div>
 
       <div className="p-3 space-y-3">
-        <SafetyIdentifierCard value={safetyIdentifier} />
+        <SafetyIdentifierCard enabled={safetyIdentifierEnabled} value={safetyIdentifier} />
 
         {turns.length === 0 && (
           <p className="px-1 text-xs text-zinc-500">
@@ -112,6 +126,18 @@ export default function TurnLog({ width, turns, safetyIdentifier, onExport }) {
                   )}
                   <IdRow label="request" value={c.request_id} />
                   <IdRow label="response" value={c.response_id} />
+                  {c.status && (
+                    <div className="flex items-center gap-1.5 text-[10px] text-rose-300">
+                      <span className="w-14 shrink-0 text-zinc-500">status</span>
+                      <span>{c.status}</span>
+                    </div>
+                  )}
+                  {c.error && (
+                    <div className="flex items-start gap-1.5 text-[10px] text-rose-300">
+                      <span className="w-14 shrink-0 text-zinc-500">error</span>
+                      <span className="min-w-0 flex-1 break-words">{c.error}</span>
+                    </div>
+                  )}
                   {c.usage && (
                     <div className="flex items-center gap-1.5 text-[10px] text-zinc-500">
                       <span className="w-14 shrink-0">tokens</span>
