@@ -150,9 +150,29 @@ function resolvePath(workspaceRoot, relPath, allowOutside) {
 // not under the root as "outside". URLs are ignored. This can't catch every
 // case (e.g. a command that cd's via a variable), so it errs toward "outside"
 // when an absolute-looking path is present — outside access is then ask-first.
+function stripHeredocBodies(command) {
+  const lines = String(command || "").split(/\r?\n/);
+  const kept = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    kept.push(line);
+
+    const match = line.match(/<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/);
+    if (!match) continue;
+
+    const delimiter = match[1];
+    while (i + 1 < lines.length && lines[i + 1].trim() !== delimiter) i++;
+    if (i + 1 < lines.length) kept.push(lines[++i]);
+  }
+
+  return kept.join("\n");
+}
+
 function commandLooksOutside(command, root) {
+  const shellText = stripHeredocBodies(command);
   // Strip URLs so "https://host/path" isn't read as an absolute filesystem path.
-  const cleaned = command.replace(/[a-zA-Z][a-zA-Z0-9+.-]*:\/\/\S*/g, " ");
+  const cleaned = shellText.replace(/[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s"'`)]*/g, " ");
   if (/(^|[\s"'=(:])\.\.(\/|\\|$|\s)/.test(cleaned)) return true;
 
   const candidates = [];
@@ -160,8 +180,8 @@ function commandLooksOutside(command, root) {
   for (const m of cleaned.matchAll(/"([^"]*)"|'([^']*)'/g)) candidates.push(m[1] ?? m[2]);
   // Then unquoted, whitespace-delimited path-looking tokens.
   const unquoted = cleaned.replace(/"[^"]*"|'[^']*'/g, " ");
-  for (const m of unquoted.matchAll(/(~[^\s"';|&]*|\/[^\s"';|&]*|[A-Za-z]:\\[^\s"';|&]*)/g)) {
-    candidates.push(m[0]);
+  for (const m of unquoted.matchAll(/(^|[\s<>|;&()])(~[^\s"'<>;|&()]*|\/[^\s"'<>;|&()]*|[A-Za-z]:\\[^\s"'<>;|&()]*)/g)) {
+    candidates.push(m[2]);
   }
 
   for (const t of candidates) {
