@@ -233,12 +233,15 @@ export function needsApproval({ name, args, approvalMode, outside, allowOutsideW
 }
 
 function isOutside(root, resolved) {
-  // Windows paths are case-insensitive, so compare case-folded there to avoid
-  // false "outside" hits when drive/letter casing differs (e.g. c:\ vs C:\).
-  const norm = (p) => (process.platform === "win32" ? p.toLowerCase() : p);
-  const r = norm(root);
-  const x = norm(resolved);
-  return x !== r && !x.startsWith(r + path.sep);
+  // Use path.relative to reliably determine whether `resolved` is outside
+  // `root`. If the relative path begins with ".." the target is outside.
+  // This handles drive-letter casing, UNC/long paths, and platform separators.
+  const r = path.resolve(root);
+  const x = path.resolve(resolved);
+  const rel = path.relative(r, x);
+  if (rel === "") return false;
+  const first = rel.split(path.sep)[0];
+  return first === "..";
 }
 
 function firstSegment(p) {
@@ -253,11 +256,10 @@ function resolveWorkspacePath(root, input) {
   const absolute = path.resolve(raw);
   if (!isOutside(root, absolute)) return absolute;
 
-  // Models often use web-style root-relative paths such as /public or /src.
-  // Treat those as workspace children. Full absolute paths that share the
-  // workspace's top-level segment still behave as absolute paths, so parent
-  // access like /Users/me remains outside.
-  if (firstSegment(raw) !== firstSegment(root)) {
+  // Treat leading / or \ as workspace-root-relative (models often emit
+  // "/src" style paths). Convert those into workspace-child paths rather
+  // than treating them as OS-absolute.
+  if (raw.startsWith("/") || raw.startsWith("\\")) {
     return path.resolve(root, raw.replace(/^[/\\]+/, "") || ".");
   }
 

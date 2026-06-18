@@ -60,8 +60,24 @@ export async function createResponse({ apiKey, body }) {
       body: JSON.stringify(body),
     });
   } catch (e) {
+    const bodyStr = JSON.stringify(body);
+    const log = {
+      timestamp: new Date().toISOString(),
+      error: e.message,
+      errorCode: e.code,
+      errorStack: e.stack,
+      nodeVersion: process.version,
+      apiUrl: RESPONSES_URL,
+      requestBodySize: bodyStr.length,
+      hasMessages: !!body?.messages,
+      messageCount: Array.isArray(body?.messages) ? body.messages.length : 0,
+      model: body?.model,
+      hasPreviousResponseId: !!body?.previous_response_id,
+    };
+    console.error("[openai.createResponse] Network error:", log);
     const err = new Error(`Network error contacting OpenAI: ${e.message}`);
     err.status = 0;
+    err.originalError = e;
     throw err;
   }
 

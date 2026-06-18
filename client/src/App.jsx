@@ -34,6 +34,13 @@ const deriveTitle = (text) => {
   return t.length > 42 ? t.slice(0, 42) + "…" : t;
 };
 
+const formatWorkspace = (workspaceRoot) => {
+  if (!workspaceRoot?.trim()) return "no workspace";
+  const maxLen = 80;
+  if (workspaceRoot.length <= maxLen) return workspaceRoot;
+  return `...${workspaceRoot.slice(-maxLen)}`;
+};
+
 const readDataUrl = (file) =>
   new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -244,6 +251,42 @@ const MessageRow = memo(function MessageRow({ message, onApprove, onReject }) {
   );
 });
 
+// Error logging utilities
+const LOG_KEY = "cla.error-logs.v1";
+const MAX_LOGS = 50;
+
+function logFailure(error, context) {
+  try {
+    const logs = JSON.parse(localStorage.getItem(LOG_KEY) || "[]");
+    const entry = {
+      timestamp: new Date().toISOString(),
+      error: String(error),
+      message: context.text,
+      messageLength: context.text?.length,
+      attachmentCount: context.attachments?.length || 0,
+      model: context.model,
+      keyLabel: context.keyLabel,
+      safetyIdentifierEnabled: context.safetyIdentifierEnabled,
+      previousResponseIdPresent: !!context.previousResponseId,
+      workspaceRoot: context.workspaceRoot,
+      apiEmail: context.apiIdentity?.email,
+    };
+    const updated = [entry, ...logs].slice(0, MAX_LOGS);
+    localStorage.setItem(LOG_KEY, JSON.stringify(updated));
+    console.error("[codex] Request failed:", entry);
+  } catch (e) {
+    console.error("[codex] Could not log error:", e);
+  }
+}
+
+function getErrorLogs() {
+  try {
+    return JSON.parse(localStorage.getItem(LOG_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
 export default function App() {
   const {
     apiKeys,
@@ -276,9 +319,12 @@ export default function App() {
   const hiddenMessageCount = messages.length - visibleMessages.length;
 
   const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState("");
-  const [error, setError] = useState(null);
+  const [requestState, setRequestState] = useState({});
+  const [failedMessage, setFailedMessage] = useState(null);
+  const [recoveryMode, setRecoveryMode] = useState(null);
+
+  const requestControllers = useRef(new Map());
+  const approvalChatMap = useRef(new Map());
 
   const [leftWidth, setLeftWidth] = useState(() => loadWidth("left"));
   const [rightWidth, setRightWidth] = useState(() => loadWidth("right"));
@@ -287,11 +333,21 @@ export default function App() {
   const fileInputRef = useRef(null);
   const textareaRef = useRef(null);
 
-  const streamChatId = useRef(null); // chat the in-flight stream writes to
   const scrollRef = useRef(null);
-  const abortRef = useRef(null);
   const identityCheckRef = useRef(new Set());
   const stickToBottomRef = useRef(true);
+
+  const updateRequestState = useCallback((chatId, patch) => {
+    setRequestState((prev) => ({
+      ...prev,
+      [chatId]: { ...prev[chatId], ...patch },
+    }));
+  }, []);
+
+  const currentRequest = requestState[activeChatId] || {};
+  const busy = Boolean(currentRequest.busy);
+  const status = currentRequest.status || "";
+  const error = currentRequest.error || null;
 
   useEffect(() => {
     const scroller = scrollRef.current;
@@ -325,10 +381,10 @@ export default function App() {
 
   // Reset transient UI state when switching to a different chat.
   useEffect(() => {
-    setError(null);
-    setStatus("");
     setAttachments([]);
     setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
+    setFailedMessage(null);
+    setRecoveryMode(null);
   }, [activeChatId]);
 
   // Pre-fill the workspace folder from the server default for the first chat.
@@ -382,13 +438,13 @@ export default function App() {
     const added = [];
     for (const f of files) {
       if (f.size > MAX_ATTACH_BYTES) {
-        setError(`"${f.name}" is larger than 10 MB and was skipped.`);
+        updateRequestState(activeChatId, { error: `"${f.name}" is larger than 10 MB and was skipped.` });
         continue;
       }
       try {
         added.push(await fileToAttachment(f));
       } catch {
-        setError(`Could not read "${f.name}".`);
+        updateRequestState(activeChatId, { error: `Could not read "${f.name}".` });
       }
     }
     if (added.length) setAttachments((prev) => [...prev, ...added]);
@@ -432,36 +488,31 @@ export default function App() {
 
   const send = async () => {
     const text = input.trim();
-    if ((!text && attachments.length === 0) || busy) return;
+    const chatId = activeChatId;
+    if ((!text && attachments.length === 0) || Boolean(requestState[chatId]?.busy)) return;
     if (!chat) {
-      setError("Create a chat before sending a prompt.");
+      updateRequestState(chatId, { error: "Create a chat before sending a prompt." });
       return;
     }
     if (!activeKey) {
-      setError("Choose an API key for this chat in the sidebar first.");
+      updateRequestState(chatId, { error: "Choose an API key for this chat in the sidebar first." });
       return;
     }
     if (!chat.workspaceValidated) {
-      setError("Validate this chat's workspace folder in the sidebar before chatting.");
+      updateRequestState(chatId, { error: "Validate this chat's workspace folder in the sidebar before chatting." });
       return;
     }
 
-    const chatId = activeChatId;
-    setError(null);
-    setBusy(true);
-    setStatus("Checking API key…");
+    updateRequestState(chatId, { busy: true, status: "Checking API key…", error: null });
 
     let apiIdentity;
     try {
       apiIdentity = await ensureApiIdentity(chatId);
     } catch (e) {
-      setError(e.message);
-      setBusy(false);
-      setStatus("");
+      updateRequestState(chatId, { busy: false, status: "", error: e.message });
       return;
     }
 
-    streamChatId.current = chatId;
     const sentAttachments = attachments;
     const safetyId = chat.safetyIdentifierEnabled ? chat.safetyIdentifier || null : null;
     const turnId = nextId("turn");
@@ -470,7 +521,7 @@ export default function App() {
     stickToBottomRef.current = true;
     setInput("");
     setAttachments([]);
-    setStatus("Thinking…");
+    updateRequestState(chatId, { status: "Thinking…" });
 
     // Append the user message + a new turn-log entry; title the chat from the
     // first message.
@@ -517,13 +568,13 @@ export default function App() {
     };
 
     const controller = new AbortController();
-    abortRef.current = controller;
+    requestControllers.current.set(chatId, controller);
 
     try {
       await streamChat(
         payload,
         {
-          status: (d) => setStatus(d.message || ""),
+          status: (d) => updateRequestState(chatId, { status: d.message || "" }),
           ids: (d) =>
             updateChat(chatId, (c) => ({
               turns: c.turns.map((t) =>
@@ -531,13 +582,14 @@ export default function App() {
               ),
             })),
           assistant_message: (d) => {
-            setStatus("");
+            updateRequestState(chatId, { status: "" });
             updateChat(chatId, (c) => ({
               messages: [...c.messages, { id: nextId("msg"), role: "assistant", text: d.text }],
             }));
           },
           tool_call: (d) => {
-            setStatus("");
+            updateRequestState(chatId, { status: "" });
+            if (d.call_id) approvalChatMap.current.set(d.call_id, chatId);
             updateChat(chatId, (c) => ({
               messages: [
                 ...c.messages,
@@ -556,9 +608,10 @@ export default function App() {
           },
           approval_request: (d) => {
             patchTool(chatId, d.call_id, { status: "pending_approval", outside: d.outside });
-            setStatus("Waiting for your approval…");
+            updateRequestState(chatId, { status: "Waiting for your approval…" });
           },
           tool_result: (d) => {
+            if (d.call_id) approvalChatMap.current.delete(d.call_id);
             patchTool(chatId, d.call_id, {
               status: d.rejected ? "rejected" : "done",
               result: d.result,
@@ -566,7 +619,7 @@ export default function App() {
           },
           done: (d) => {
             if (d.previousResponseId) updateChat(chatId, { previousResponseId: d.previousResponseId });
-            setStatus("");
+            updateRequestState(chatId, { status: "" });
           },
           error: (d) => {
             const failedCall = {
@@ -592,8 +645,28 @@ export default function App() {
                 };
               }),
             }));
-            setError(`${d.message}${d.request_id ? ` (request id: ${d.request_id})` : ""}`);
-            setStatus("");
+            // Capture failed message for recovery (retry/edit/branch)
+            setFailedMessage({
+              text,
+              attachments: sentAttachments,
+              previousResponseId: chat.previousResponseId,
+              turnId,
+              userMessageId,
+            });
+            logFailure(d.message, {
+              text,
+              attachments: sentAttachments,
+              model: chat.model,
+              keyLabel: activeKey.label,
+              safetyIdentifierEnabled: chat.safetyIdentifierEnabled,
+              previousResponseId: chat.previousResponseId,
+              workspaceRoot: chat.workspaceRoot,
+              apiIdentity: apiIdentity,
+            });
+            updateRequestState(chatId, {
+              status: "",
+              error: `${d.message}${d.request_id ? ` (request id: ${d.request_id})` : ""}`,
+            });
           },
         },
         controller.signal
@@ -604,20 +677,37 @@ export default function App() {
           messages: [...c.messages, { id: nextId("notice"), type: "notice", text: "Stopped by you." }],
         }));
       } else {
-        setError(e.message);
+        // Capture failed message for recovery on network/fetch errors
+        setFailedMessage({
+          text,
+          attachments: sentAttachments,
+          previousResponseId: chat.previousResponseId,
+          turnId,
+          userMessageId,
+        });
+        logFailure(e.message, {
+          text,
+          attachments: sentAttachments,
+          model: chat.model,
+          keyLabel: activeKey.label,
+          safetyIdentifierEnabled: chat.safetyIdentifierEnabled,
+          previousResponseId: chat.previousResponseId,
+          workspaceRoot: chat.workspaceRoot,
+          apiIdentity: apiIdentity,
+        });
+        updateRequestState(chatId, { error: e.message });
       }
     } finally {
-      abortRef.current = null;
-      setBusy(false);
-      setStatus("");
+      requestControllers.current.delete(chatId);
+      updateRequestState(chatId, { busy: false, status: "" });
     }
   };
 
-  const stop = () => {
-    abortRef.current?.abort();
-    const chatId = streamChatId.current;
+  const stop = (chatId = activeChatId) => {
+    const controller = requestControllers.current.get(chatId);
+    controller?.abort();
+    requestControllers.current.delete(chatId);
     if (chatId) {
-      // Clear any tool calls that were waiting on the model or your approval.
       updateChat(chatId, (c) => ({
         messages: c.messages.map((m) =>
           m.type === "tool" && (m.status === "running" || m.status === "pending_approval")
@@ -625,18 +715,83 @@ export default function App() {
             : m
         ),
       }));
+      updateRequestState(chatId, { busy: false, status: "" });
     }
-    setStatus("");
   };
 
   const handleApprove = useCallback(async (callId) => {
-    patchTool(streamChatId.current, callId, { status: "running" });
-    setStatus("Thinking…");
+    const chatId = approvalChatMap.current.get(callId) || activeChatId;
+    if (chatId) {
+      patchTool(chatId, callId, { status: "running" });
+      updateRequestState(chatId, { status: "Thinking…" });
+    }
     await approveToolCall(callId, true);
-  }, [patchTool]);
+  }, [activeChatId, patchTool]);
   const handleReject = useCallback(async (callId) => {
+    const chatId = approvalChatMap.current.get(callId) || activeChatId;
     await approveToolCall(callId, false);
-  }, []);
+    if (chatId) approvalChatMap.current.delete(callId);
+  }, [activeChatId]);
+
+  // Recovery option A: Retry the failed message as-is
+  const handleRetry = useCallback(() => {
+    if (!failedMessage) return;
+    setRecoveryMode("retry");
+    setAttachments(failedMessage.attachments);
+    // Re-send using the stored message and context
+    // Remove the failed turn and messages from this attempt, then resend
+    updateChat(activeChatId, (c) => ({
+      messages: c.messages.filter((m) => m.id !== failedMessage.userMessageId),
+      turns: c.turns.filter((t) => t.id !== failedMessage.turnId),
+    }));
+    setFailedMessage(null);
+    setRecoveryMode(null);
+    setInput(failedMessage.text);
+    // Trigger send on next tick so input is updated
+    setTimeout(() => send(), 0);
+  }, [failedMessage, activeChatId, updateChat, send]);
+
+  // Recovery option B: Edit and retry
+  const handleEditAndRetry = useCallback(() => {
+    if (!failedMessage) return;
+    setAttachments(failedMessage.attachments);
+    setInput(failedMessage.text);
+    // Remove the failed attempt from chat
+    updateChat(activeChatId, (c) => ({
+      messages: c.messages.filter((m) => m.id !== failedMessage.userMessageId),
+      turns: c.turns.filter((t) => t.id !== failedMessage.turnId),
+    }));
+    setFailedMessage(null);
+    updateRequestState(activeChatId, { error: null });
+    textareaRef.current?.focus();
+  }, [failedMessage, activeChatId, updateChat, updateRequestState]);
+
+  // Recovery option C: Branch to new chat from current point
+  const handleBranch = useCallback(() => {
+    if (!failedMessage) return;
+    // Create new chat with same settings as current
+    const newChat = createChat({
+      title: `${chat.title} (branch)`,
+      messages: chat.messages.slice(0, -1), // Exclude the failed user message
+      turns: chat.turns.slice(0, -1), // Exclude the failed turn
+      previousResponseId: failedMessage.previousResponseId, // Use last known-good context
+      keyId: chat.keyId,
+      model: chat.model,
+      safetyIdentifier: chat.safetyIdentifier,
+      safetyIdentifierEnabled: chat.safetyIdentifierEnabled,
+      approvalMode: chat.approvalMode,
+      allowOutsideWorkspace: chat.allowOutsideWorkspace,
+      workspaceRoot: chat.workspaceRoot,
+      workspaceValidated: chat.workspaceValidated,
+      apiIdentity: chat.apiIdentity,
+    });
+    // Switch to new chat and put message in composer
+    switchChat(newChat.id);
+    setInput(failedMessage.text);
+    setAttachments(failedMessage.attachments);
+    setFailedMessage(null);
+    updateRequestState(activeChatId, { error: null });
+  }, [failedMessage, chat, createChat, switchChat, activeChatId, updateRequestState]);
 
   const onKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -722,6 +877,33 @@ export default function App() {
     download(`turn-log-${stamp()}.csv`, csv, "text/csv;charset=utf-8");
   };
 
+  const exportErrorLogs = () => {
+    const logs = getErrorLogs();
+    if (logs.length === 0) {
+      alert("No error logs yet.");
+      return;
+    }
+    const csv = "\ufeff" + [
+      csvLine(["timestamp", "error", "message", "messageLength", "attachmentCount", "model", "keyLabel", "safetyIdentifierEnabled", "previousResponseIdPresent", "workspaceRoot", "apiEmail"]),
+      ...logs.map((log) =>
+        csvLine([
+          log.timestamp,
+          log.error,
+          log.message,
+          log.messageLength,
+          log.attachmentCount,
+          log.model,
+          log.keyLabel,
+          log.safetyIdentifierEnabled,
+          log.previousResponseIdPresent,
+          log.workspaceRoot,
+          log.apiEmail,
+        ])
+      ),
+    ].join("\r\n");
+    download(`error-logs-${stamp()}.csv`, csv, "text/csv;charset=utf-8");
+  };
+
   const canChat = Boolean(activeKey && chat?.workspaceValidated);
 
   return (
@@ -729,6 +911,7 @@ export default function App() {
       <Sidebar
         width={leftWidth}
         chats={chats}
+        requestState={requestState}
         activeChatId={activeChatId}
         onNewChat={() => setShowNewChat(true)}
         onSwitchChat={switchChat}
@@ -746,7 +929,15 @@ export default function App() {
           <div className="min-w-0">
             <div className="truncate font-semibold">{chat?.title || "No chat selected"}</div>
             <div className="text-xs text-zinc-500">
-              {chat ? `${activeKey ? activeKey.label : "no key selected"} · ${chat.model}` : "create a chat to begin"}
+              {chat ? (
+                <>
+                  {activeKey ? activeKey.label : "no key selected"} · {chat.model}
+                  <span className="mx-1">·</span>
+                  <span className="break-all text-zinc-400">{formatWorkspace(chat.workspaceRoot)}</span>
+                </>
+              ) : (
+                "create a chat to begin"
+              )}
             </div>
           </div>
           <button
@@ -756,6 +947,13 @@ export default function App() {
             className="ml-auto flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-sm hover:bg-white/5 disabled:opacity-40"
           >
             <Download size={14} /> .md
+          </button>
+          <button
+            onClick={exportErrorLogs}
+            title="Download error logs as CSV"
+            className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-sm hover:bg-white/5"
+          >
+            ⚠️ Logs
           </button>
           <button
             onClick={() => setShowNewChat(true)}
@@ -815,9 +1013,33 @@ export default function App() {
             )}
 
             {error && (
-              <div className="flex items-start gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-300">
-                <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                <span className="whitespace-pre-wrap">{error}</span>
+              <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3">
+                <div className="flex items-start gap-2 text-sm text-rose-300">
+                  <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                  <span className="whitespace-pre-wrap">{error}</span>
+                </div>
+                {failedMessage && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      onClick={handleRetry}
+                      className="rounded px-2 py-1 text-xs font-medium text-rose-200 hover:bg-rose-500/20"
+                    >
+                      Retry
+                    </button>
+                    <button
+                      onClick={handleEditAndRetry}
+                      className="rounded px-2 py-1 text-xs font-medium text-rose-200 hover:bg-rose-500/20"
+                    >
+                      Edit & Retry
+                    </button>
+                    <button
+                      onClick={handleBranch}
+                      className="rounded px-2 py-1 text-xs font-medium text-rose-200 hover:bg-rose-500/20"
+                    >
+                      Branch
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -9,6 +9,7 @@ import {
   MessageSquare,
   MessageSquarePlus,
   Pencil,
+  Loader2,
 } from "lucide-react";
 
 function Section({ title, icon: Icon, children }) {
@@ -38,6 +39,7 @@ function relTime(ts) {
 export default function Sidebar({
   width,
   chats,
+  requestState,
   activeChatId,
   onNewChat,
   onSwitchChat,
@@ -121,7 +123,12 @@ export default function Sidebar({
                     className="min-w-0 flex-1 text-left"
                     title={c.title}
                   >
-                    <div className="truncate text-sm text-zinc-200">{c.title}</div>
+                    <div className="flex items-center gap-1 truncate text-sm text-zinc-200">
+                      <span className="truncate">{c.title}</span>
+                      {requestState?.[c.id]?.busy && (
+                        <Loader2 size={12} className="text-sky-400 animate-spin" />
+                      )}
+                    </div>
                     <div className="text-[10px] text-zinc-500">{relTime(c.updatedAt)}</div>
                   </button>
                 )}
