@@ -101,6 +101,36 @@ app.post("/api/approve", (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/api/clear-workspace", async (req, res) => {
+  const { workspaceRoot } = req.body || {};
+  if (!workspaceRoot) {
+    return res.status(400).json({ ok: false, error: "workspaceRoot is required." });
+  }
+  try {
+    const root = path.resolve(workspaceRoot);
+    const stat = await fs.stat(root);
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ ok: false, error: "Workspace root is not a directory." });
+    }
+
+    const entries = await fs.readdir(root, { withFileTypes: true });
+    await Promise.all(
+      entries.map(async (entry) => {
+        const target = path.join(root, entry.name);
+        if (entry.isDirectory()) {
+          await fs.rm(target, { recursive: true, force: true });
+        } else {
+          await fs.unlink(target).catch(() => {});
+        }
+      })
+    );
+
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e.message || "Failed to clear workspace." });
+  }
+});
+
 // Main agent endpoint. Streams progress to the client via Server-Sent Events.
 app.post("/api/chat", async (req, res) => {
   const {

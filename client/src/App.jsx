@@ -11,6 +11,7 @@ import {
   FileText,
   Image as ImageIcon,
   X,
+  Trash2,
 } from "lucide-react";
 import { useStore } from "./lib/useSettings";
 import { streamChat, approveToolCall, inspectApiKey } from "./lib/agentClient";
@@ -322,6 +323,10 @@ export default function App() {
   const [requestState, setRequestState] = useState({});
   const [failedMessage, setFailedMessage] = useState(null);
   const [recoveryMode, setRecoveryMode] = useState(null);
+  const [deleteChatId, setDeleteChatId] = useState(null);
+  const [clearWorkspaceOnDelete, setClearWorkspaceOnDelete] = useState(false);
+  const [deleteInProgress, setDeleteInProgress] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
 
   const requestControllers = useRef(new Map());
   const approvalChatMap = useRef(new Map());
@@ -719,6 +724,55 @@ export default function App() {
     }
   };
 
+  const cancelDeleteChat = useCallback(() => {
+    setDeleteChatId(null);
+    setClearWorkspaceOnDelete(false);
+    setDeleteInProgress(false);
+    setDeleteError(null);
+  }, []);
+
+  const requestDeleteChat = useCallback((id) => {
+    setDeleteChatId(id);
+    setClearWorkspaceOnDelete(false);
+    setDeleteError(null);
+  }, []);
+
+  const performDeleteChat = useCallback(async () => {
+    if (!deleteChatId) return;
+    const chatToDelete = chats.find((c) => c.id === deleteChatId);
+    if (!chatToDelete) {
+      cancelDeleteChat();
+      return;
+    }
+
+    stop(deleteChatId);
+    setDeleteInProgress(true);
+    setDeleteError(null);
+
+    if (clearWorkspaceOnDelete && chatToDelete.workspaceRoot) {
+      try {
+        const response = await fetch("/api/clear-workspace", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workspaceRoot: chatToDelete.workspaceRoot }),
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          setDeleteError(payload?.error || "Could not clear workspace contents.");
+          setDeleteInProgress(false);
+          return;
+        }
+      } catch (e) {
+        setDeleteError(e.message || "Could not clear workspace contents.");
+        setDeleteInProgress(false);
+        return;
+      }
+    }
+
+    deleteChat(deleteChatId);
+    cancelDeleteChat();
+  }, [cancelDeleteChat, clearWorkspaceOnDelete, deleteChat, deleteChatId, chats, stop]);
+
   const handleApprove = useCallback(async (callId) => {
     const chatId = approvalChatMap.current.get(callId) || activeChatId;
     if (chatId) {
@@ -916,7 +970,7 @@ export default function App() {
         onNewChat={() => setShowNewChat(true)}
         onSwitchChat={switchChat}
         onRenameChat={renameChat}
-        onDeleteChat={deleteChat}
+        onDeleteChat={requestDeleteChat}
         settings={chat}
         update={updateActive}
         activeKey={activeKey}
@@ -1154,6 +1208,73 @@ export default function App() {
         removeKey={removeKey}
         defaults={chat || {}}
       />
+
+      {deleteChatId && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onMouseDown={cancelDeleteChat}
+        >
+          <div
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-[#0c0c0e] shadow-2xl"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 border-b border-white/10 px-5 py-3">
+              <Trash2 size={16} className="text-rose-400" />
+              <div className="font-semibold">Delete chat</div>
+              <button
+                onClick={cancelDeleteChat}
+                className="ml-auto text-zinc-500 hover:text-zinc-200"
+                title="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="space-y-4 p-5 text-sm text-zinc-300">
+              <p>
+                Are you sure you want to delete this chat? This will remove the chat
+                history from the app.
+              </p>
+              <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+                <input
+                  type="checkbox"
+                  checked={clearWorkspaceOnDelete}
+                  onChange={(e) => setClearWorkspaceOnDelete(e.target.checked)}
+                  className="h-4 w-4 accent-sky-500"
+                />
+                <span>
+                  Also clear the workspace contents in <strong>{formatWorkspace(chats.find((c) => c.id === deleteChatId)?.workspaceRoot)}</strong>
+                  . The folder itself will remain.
+                </span>
+              </label>
+              <p className="text-xs text-zinc-500">
+                Choose "Clear workspace" only if you want the model-created files and folders removed.
+                If you decline, the workspace folder remains intact and can be deleted externally later.
+              </p>
+              {deleteError && (
+                <div className="rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+                  {deleteError}
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-2 border-t border-white/10 px-5 py-3">
+              <button
+                onClick={cancelDeleteChat}
+                disabled={deleteInProgress}
+                className="rounded-lg border border-white/10 px-3 py-2 text-sm text-zinc-300 hover:bg-white/5 disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={performDeleteChat}
+                disabled={deleteInProgress}
+                className="ml-auto rounded-lg bg-rose-600 px-3 py-2 text-sm text-white transition hover:bg-rose-500 disabled:opacity-40"
+              >
+                {deleteInProgress ? "Deleting…" : "Delete chat"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -381,7 +381,12 @@ function commandLooksOutside(command, root) {
   const shellText = stripHeredocBodies(command);
   // Strip URLs so "https://host/path" isn't read as an absolute filesystem path.
   const cleaned = shellText.replace(/[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s"'`)]*/g, " ");
-  if (/(^|[\s"'=(:])\.\.(\/|\\|$|\s)/.test(cleaned)) return true;
+  // Detect parent-directory traversal patterns like "..\/", "../", or
+  // standalone ".." tokens used to escape the workspace. We allow common
+  // surrounding punctuation but avoid matching things like "..something".
+  // Match start-of-string or whitespace/punctuation before ".." and then
+  // either a slash, backslash, end-of-string, or whitespace after it.
+  if (/(^|[^\S\r\n"'=(:;,[{])\.\.(?:[\/\\]|$|\s)/.test(cleaned)) return true;
 
   const candidates = [];
   // Quoted paths first — these may legitimately contain spaces.
@@ -394,6 +399,9 @@ function commandLooksOutside(command, root) {
 
   for (const t of candidates) {
     if (!t) continue;
+    // Ignore short slash-style command flags like `/s` or `/q` which look like
+    // absolute paths but are actually command options on Windows shells.
+    if (/^[\\/][A-Za-z0-9_-]{1,3}$/.test(t)) continue;
     if (t.startsWith("~")) return true; // home dir lives outside the workspace
     const isWin = /^[A-Za-z]:[\\/]/.test(t) || t.startsWith("\\\\");
     const isPosix = t.startsWith("/");
